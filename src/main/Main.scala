@@ -7,6 +7,7 @@ import edit.WeightedTransducer
 import edit.ThreeWayComposition
 import edit.ShortestPath
 import edit.Path
+import edit.AlternatingMethod
 
 object Main {
 
@@ -82,12 +83,20 @@ object Main {
 	  }
 	  System.exit(0)*/
 	  
-	  val result = ThreeWayComposition(wt,we,wp)	  
+	  val result = ThreeWayComposition(wt,we,wp)
+	  
+	  
+	  AlternatingMethod(result,1)
+	  System.exit(0)
+	  
 	  println("Composition done")
 	  val min_estimate = ShortestPath(result)
 	  println("min_estimate: "+min_estimate)
 	  
-	  val (w,paths) = ShortestPath(0,min_estimate,result)
+	  
+	  
+	  
+	  val (w,paths,_) = ShortestPath(0,min_estimate,result,100)
 	  //val (w,paths) = ShortestPath(15,20,result)
 	  
 	  println("-----------------")

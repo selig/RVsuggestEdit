@@ -138,13 +138,13 @@ object WeightedTransducer{
     alphabet.foreach{a => m+= ( ((a,null),(a,null)) -> (0,init))}
     //replacement
     alphabet.foreach{a => (alphabet-a).foreach{b => 
-      m+= ( ((a,null),(b,null)) -> (10,init))
-      m+= ( ((b,null),(a,null)) -> (10,init))
+      m+= ( ((a,null),(b,null)) -> (1,init))
+      m+= ( ((b,null),(a,null)) -> (1,init))
     }}
     //deletion
-    alphabet.foreach{a => m+= ( ((a,null),(epsilon,null)) -> (10,init))}
+    alphabet.foreach{a => m+= ( ((a,null),(epsilon,null)) -> (1,init))}
     //insertion
-    alphabet.foreach{a => m+= ( ((epsilon,null),(a,null)) -> (10,init))}
+    alphabet.foreach{a => m+= ( ((epsilon,null),(a,null)) -> (1,init))}
     
     var accept = Set(init)
     var delta = Map(init -> m)
@@ -372,7 +372,7 @@ object ShortestPath{
       val state = queue.dequeue
       
       for((a,(w,e)) <- wt.delta(state)){
-        val next = d(state) + (if(eds.getOrElse(state,Set()) contains a) 1 else w)
+        val next = d(state) + (if(eds.getOrElse(state,Set()) contains a) w else 10*w)
         if(next < d(e)){
           d += (e -> next)
           eds += (e -> (eds.getOrElse(state,Set())+a))
@@ -410,7 +410,22 @@ object ShortestPath{
     min
   }
 
-def apply(minmin:Int,startmin:Int, wt : WeightedTransducer) : (Int,Set[List[(Event,Event,Int)]]) = {    
+    
+  case class Store(weight:Int,spath:List[Int],epath:List[(Event,Event,Int)],eds:Set[(Event,Event)]){
+    /*
+    override def equals(x:Any) : Boolean = {
+      if(x.isInstanceOf[Store]){
+        val y = x.asInstanceOf[Store]
+        (eds equals y.eds) && (spath.last equals y.spath.last)
+      }
+      false
+    }
+    override def hashCode : Int = ((spath.last,eds)).hashCode
+    * */
+  }  
+  
+  
+def apply(minmin:Int,startmin:Int, wt : WeightedTransducer,stop:Int) : (Int,Set[List[(Event,Event,Int)]],Int) = {    
     
 	 var min = startmin
 	 val reach = wt.accept
@@ -420,40 +435,49 @@ def apply(minmin:Int,startmin:Int, wt : WeightedTransducer) : (Int,Set[List[(Eve
     // now we do a search of the machine collecting paths of length min
     
     var paths : Set[List[(Event,Event,Int)]] = Set()
-    var building = Set((0,List(0),List[(Event,Event,Int)](),Set[(Event,Event)]())) 
+    var building = Set(Store(0,List(0),List[(Event,Event,Int)](),Set[(Event,Event)]()))
+    
+    var max_removes = 0
     
 	    while(!building.isEmpty){
 	      //println(building)
-	      building = building.map{case (t,spath,epath,eds) =>
+	      building = building.map{case Store(t,spath,epath,eds) =>
 	        //println("From "+(t,spath,epath))
 	        val last = spath.last
 	        val ts = wt.delta(last).filter{case (_,(_,n)) => !(spath contains n)}.toSet
 	        val next  = ts.map{case ((i,o),(w,n)) =>
 	          //println(a+" -> "+n+" costing "+w)
-	          val nw = t+(if(eds contains (i,o)) 1 else w)
-	          val np = (nw,spath:::List(n),epath:::List((i,o,w)),eds+((i,o)))
+	          val nw = t+(if(eds contains (i,o)) w else 10*w)
+	          val np = Store(nw,spath:::List(n),epath:::List((i,o,w)),eds+((i,o)))
 	          //println(np)
 	          np
 	        }
-	        //println("next: "+next)
-	        next
+	        
+	        // If there is a 0-weight transition take only that one
+	        val zeros = next.filter(p => p.epath.last._3==0)
+	        
+	        if(!zeros.isEmpty) zeros
+	        else next
 	      }.flatten
 	      //println(building)
-	      building.filter(p => (reach contains p._2.last)).foreach{p =>
-	         if(p._1 < min && p._1 >= minmin){
+	      building.filter(p => (reach contains p.spath.last)).foreach{p =>
+	         if(p.weight < min && p.weight >= minmin){
 	          //throw new RuntimeException("Min calculation was wrong i.e.\n "+p))
-	           println("Resting min")
+	           //println("Reseting min")
 	           paths=Set()
-	           min=p._1
+	           min=p.weight
 	        }
 	      }
-	      paths ++= building.filter(p => p._1 == min && (reach contains p._2.last)).map(_._3)
-	      building = building.filter(p => p._1 <= min && !(reach contains p._2.last))
-	      //println("B "+building+"\n")
+	      paths ++= building.filter(p => p.weight == min && (reach contains p.spath.last)).map(_.epath)
+	      val bbefore = building.size
+	      building = building.filter(p => p.weight <= min && !(reach contains p.spath.last))
+	      max_removes += (bbefore - building.size)
+	      //println("B "+building.size)
+	      if(paths.size>stop) return (-1,Set(),max_removes)
 	    }
     
     //println("paths :"+paths)
-    (min,paths)
+    (min,paths,max_removes)
   }
 
   val list_int_path = new Ordering[(Int,List[Int])]{
@@ -461,6 +485,92 @@ def apply(minmin:Int,startmin:Int, wt : WeightedTransducer) : (Int,Set[List[(Eve
       
       l2._2.length - l1._2.length
     }
+  }
+}
+
+object AlternatingMethod{
+  def apply(wt:WeightedTransducer,local_max:Int) : Set[List[(Event,Event,Int)]] = {
+    
+    /*
+     * Idea is to repeatedly find the longest 0-weighted path then use local_max
+     * edits to reach another state with a 0-weighted outgoing transition and repeat
+     */
+    
+    var s = wt.init
+    while(true){
+      println(s)
+      val t = wt.delta(s).filter{case (_,(w,_)) => w==0}
+      if(t.size==0){
+        System.exit(0)
+      }
+      s = t.head._2._2
+    }
+    
+    
+    
+    Set()
+    
+  }
+}
+
+object SuggestedPaths{
+  def apply(wt:WeightedTransducer,n:Int,domin:Boolean,min_estimate:Int) : (Set[List[(Event,Event,Int)]],Int) = {
+    
+	  
+	  var set : Set[List[(Event,Event,Int)]] = Set()
+	  
+	  var actual_min = -1;
+	  
+	  var min = 0
+	  var max = min_estimate
+	  var fails = 1
+	  while(set.size<n){
+	    //println("using "+min+","+max)
+		  val (w,paths,max_rem) = ShortestPath(min,max,wt,(n-set.size))		  
+		  
+		  if(actual_min == -1) actual_min = w
+		  if(w==0) return (paths,actual_min)
+		  
+		  //paths foreach println
+		  //System.exit(0)
+		  
+		  if(paths.isEmpty){
+		    if(max_rem==0) return (set,actual_min)
+		    if(max>2*min) return (set,actual_min)
+		    fails+=1
+		    max+=(2*fails)
+		    //println("Failed, increase max to "+max+" max rem was "+max_rem)
+		  }
+		  else{
+		    
+			  //println("Produced "+paths.size+" edits of weight "+w)
+			  if(domin) return (paths,actual_min)
+			/*  
+			  var min_edit_size = Int.MaxValue
+		      val edits = paths map { path => 
+		        var m : Map[(Event,Event),Int] = Map()
+		        path.filter(_._3!=0).foreach{ case a =>
+		          val b = (a._1,a._2)
+		          m += (b -> (m.getOrElse(b,0)+1))
+		        }
+		        val edit = m.toSet
+		        if(edit.size<min_edit_size) min_edit_size = edit.size
+		        (edit,path)
+		      }		  
+			  val min_edits = edits.filter{_._1.size==min_edit_size}
+			  
+			  println("Added "+min_edits.size+" edits with min "+min_edit_size)
+			  set ++= min_edits.map(_._2)
+			  */
+			  set ++= paths
+			  min = w+1
+			  max= List(min+1,max).max
+			  
+			  //min_edits foreach { case (a,b) => println(a)}
+			  //System.exit(0)
+		  }
+	  }
+      (set,actual_min)
   }
 }
 
